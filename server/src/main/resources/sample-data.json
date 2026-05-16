@@ -1,0 +1,8 @@
+{
+  "users": [
+    {"username": "admin", "password": "admin123", "role": "ADMIN", "fullName": "System Admin", "active": true},
+    {"username": "reception", "password": "123", "role": "RECEPTIONIST", "fullName": "Reception User", "active": true},
+    {"username": "doctor", "password": "123", "role": "DOCTOR", "fullName": "Doctor User", "active": true},
+    {"username": "pharm", "password": "123", "role": "PHARMACIST", "fullName": "Pharmacist User", "active": true}
+  ]
+}
