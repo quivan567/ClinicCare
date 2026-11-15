@@ -149,7 +149,7 @@ public class ReceptionView implements RefreshableView {
         phoneColumn.setCellValueFactory(data -> new SimpleStringProperty(safe(data.getValue().getPhone())));
 
         TableColumn<Patient, String> doctorColumn = new TableColumn<>("Bác sĩ");
-        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(doctorName(data.getValue().getAssignedDoctorId())));
+        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(displayDoctor(data.getValue())));
 
         TableColumn<Patient, String> statusColumn = new TableColumn<>("Trạng thái");
         statusColumn.setCellValueFactory(data -> new SimpleStringProperty(safe(data.getValue().getStatus())));
@@ -323,7 +323,7 @@ public class ReceptionView implements RefreshableView {
             ApiResponse response = appContext.getService().receivePatient(request);
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
-                loadPatients();
+                appContext.reloadAfterLocalChange(this::loadPatients);
                 clearForm();
             }
         } catch (RemoteException e) {
@@ -367,6 +367,16 @@ public class ReceptionView implements RefreshableView {
                 .filter(doctor -> doctorId.equals(doctor.getId()))
                 .findFirst()
                 .orElse(null);
+    }
+
+    private String displayDoctor(Patient patient) {
+        if (patient == null) {
+            return "";
+        }
+        if (!isBlank(patient.getAssignedDoctorName())) {
+            return patient.getAssignedDoctorName();
+        }
+        return doctorName(patient.getAssignedDoctorId());
     }
 
     private String doctorName(String doctorId) {

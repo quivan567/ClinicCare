@@ -14,6 +14,7 @@ public class Patient implements Serializable {
     private String phone;
     private String address;
     private String assignedDoctorId;
+    private String assignedDoctorName;
     private String status;
     private LocalDateTime lastVisitAt;
 
@@ -49,6 +50,8 @@ public class Patient implements Serializable {
     public void setAddress(String address) { this.address = address; }
     public String getAssignedDoctorId() { return assignedDoctorId; }
     public void setAssignedDoctorId(String assignedDoctorId) { this.assignedDoctorId = assignedDoctorId; }
+    public String getAssignedDoctorName() { return assignedDoctorName; }
+    public void setAssignedDoctorName(String assignedDoctorName) { this.assignedDoctorName = assignedDoctorName; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getLastVisitAt() { return lastVisitAt; }

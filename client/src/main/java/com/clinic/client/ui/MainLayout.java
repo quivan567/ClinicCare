@@ -12,12 +12,13 @@ import com.clinic.client.ui.view.DoctorView;
 import com.clinic.client.ui.view.MedicalRecordsView;
 import com.clinic.client.ui.view.PatientManagementView;
 import com.clinic.client.ui.view.PharmacistView;
-import com.clinic.client.ui.view.PlaceholderView;
 import com.clinic.client.ui.view.ProfileView;
 import com.clinic.client.ui.view.ReceptionView;
 import com.clinic.client.ui.view.TestingView;
+import com.clinic.shared.dto.RealtimeEventType;
 import com.clinic.shared.model.Role;
 import com.clinic.shared.model.User;
+import javafx.animation.PauseTransition;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -28,20 +29,29 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.util.Duration;
 
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 public class MainLayout {
     private final AppContext appContext;
     private final BorderPane root = new BorderPane();
     private final VBox menuBox = new VBox(8);
     private final Map<ScreenKey, Button> menuButtons = new LinkedHashMap<>();
+    private final Map<ScreenKey, Node> screenCache = new EnumMap<>(ScreenKey.class);
+    private final Map<ScreenKey, RefreshableView> refreshableByScreen = new EnumMap<>(ScreenKey.class);
+    private final Set<ScreenKey> dirtyScreens = EnumSet.noneOf(ScreenKey.class);
+    private final PauseTransition refreshDelay = new PauseTransition(Duration.millis(200));
     private ScreenKey activeScreen = ScreenKey.DASHBOARD;
     private RefreshableView activeRefreshableView;
 
     public MainLayout(AppContext appContext) {
         this.appContext = appContext;
+        refreshDelay.setOnFinished(event -> refreshActiveContent());
     }
 
     public Scene createScene() {
@@ -135,7 +145,18 @@ public class MainLayout {
     private void showScreen(ScreenKey key) {
         activeScreen = key;
         refreshMenuStyles();
-        root.setCenter(createContent(key));
+        Node content = screenCache.get(key);
+        if (content == null) {
+            content = createContent(key);
+            screenCache.put(key, content);
+        } else {
+            RefreshableView cachedView = refreshableByScreen.get(key);
+            if (cachedView != null && dirtyScreens.remove(key)) {
+                cachedView.refreshData();
+            }
+        }
+        activeRefreshableView = refreshableByScreen.get(key);
+        root.setCenter(content);
     }
 
     private void refreshMenuStyles() {
@@ -150,7 +171,7 @@ public class MainLayout {
             case DOCTOR -> createRefreshableContent(new DoctorView(appContext));
             case TESTING -> createRefreshableContent(new TestingView(appContext));
             case PHARMACY -> createRefreshableContent(new PharmacistView(appContext));
-            case USERS -> new AdminUsersView(appContext).createContent();
+            case USERS -> createRefreshableContent(new AdminUsersView(appContext));
             case PATIENTS -> createRefreshableContent(new PatientManagementView(appContext));
             case PRESCRIPTIONS -> appContext.getCurrentUser().getRole() == Role.DOCTOR
                     ? createRefreshableContent(new DoctorPrescriptionView(appContext))
@@ -161,6 +182,7 @@ public class MainLayout {
     }
 
     private Node createRefreshableContent(RefreshableView view) {
+        refreshableByScreen.put(activeScreen, view);
         activeRefreshableView = view;
         if (view instanceof ReceptionView receptionView) {
             return receptionView.createContent();
@@ -186,13 +208,42 @@ public class MainLayout {
         if (view instanceof MedicalRecordsView medicalRecordsView) {
             return medicalRecordsView.createContent();
         }
+        if (view instanceof AdminUsersView adminUsersView) {
+            return adminUsersView.createContent();
+        }
         throw new IllegalArgumentException("Unsupported refreshable view: " + view.getClass().getName());
     }
 
+    public void onRealtimeEvent(String type) {
+        dirtyScreens.addAll(affectedScreens(type));
+        refreshDelay.playFromStart();
+    }
+
     public void refreshActiveContent() {
-        if (activeRefreshableView != null) {
-            activeRefreshableView.refreshData();
+        if (activeRefreshableView == null || !dirtyScreens.contains(activeScreen)) {
+            return;
         }
+        if (appContext.isRealtimeSuppressed()) {
+            dirtyScreens.remove(activeScreen);
+            return;
+        }
+        dirtyScreens.remove(activeScreen);
+        activeRefreshableView.refreshData();
+    }
+
+    private Set<ScreenKey> affectedScreens(String type) {
+        if (type == null) {
+            return EnumSet.allOf(ScreenKey.class);
+        }
+        return switch (type) {
+            case RealtimeEventType.PATIENT_CHANGED -> EnumSet.of(
+                    ScreenKey.RECEPTION, ScreenKey.DOCTOR, ScreenKey.TESTING, ScreenKey.PATIENTS, ScreenKey.PRESCRIPTIONS);
+            case RealtimeEventType.PRESCRIPTION_CHANGED -> EnumSet.of(ScreenKey.PRESCRIPTIONS, ScreenKey.PHARMACY);
+            case RealtimeEventType.MEDICAL_RECORD_CHANGED -> EnumSet.of(ScreenKey.MEDICAL_RECORDS, ScreenKey.DOCTOR);
+            case RealtimeEventType.TEST_RESULT_CHANGED -> EnumSet.of(ScreenKey.TESTING, ScreenKey.DOCTOR);
+            case RealtimeEventType.USER_CHANGED -> EnumSet.of(ScreenKey.USERS, ScreenKey.RECEPTION, ScreenKey.PATIENTS);
+            default -> EnumSet.noneOf(ScreenKey.class);
+        };
     }
 
     private String roleLabel(Role role) {

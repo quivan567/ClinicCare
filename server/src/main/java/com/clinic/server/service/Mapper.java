@@ -3,11 +3,16 @@ package com.clinic.server.service;
 import com.clinic.server.entity.MedicalRecordEntity;
 import com.clinic.server.entity.PatientEntity;
 import com.clinic.server.entity.PrescriptionEntity;
+import com.clinic.server.entity.PrescriptionItemEntity;
 import com.clinic.server.entity.UserEntity;
 import com.clinic.shared.model.MedicalRecord;
 import com.clinic.shared.model.Patient;
 import com.clinic.shared.model.Prescription;
+import com.clinic.shared.model.PrescriptionItem;
 import com.clinic.shared.model.User;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public final class Mapper {
     private Mapper() {
@@ -20,7 +25,6 @@ public final class Mapper {
         User m = new User();
         m.setId(e.getId());
         m.setUsername(e.getUsername());
-        m.setPassword(e.getPassword());
         m.setRole(e.getRole());
         m.setFullName(e.getFullName());
         m.setActive(e.isActive());
@@ -54,10 +58,21 @@ public final class Mapper {
         m.setCode(e.getCode());
         m.setPatientId(e.getPatientId());
         m.setDoctorId(e.getDoctorId());
-        m.setItems(e.getItems());
+        m.setItems(toItems(e.getItems()));
         m.setStatus(e.getStatus());
         m.setCreatedAt(e.getCreatedAt());
         return m;
+    }
+
+    private static List<PrescriptionItem> toItems(List<PrescriptionItemEntity> items) {
+        List<PrescriptionItem> models = new ArrayList<>();
+        if (items == null) {
+            return models;
+        }
+        for (PrescriptionItemEntity item : items) {
+            models.add(new PrescriptionItem(item.getMedicineName(), item.getDosage(), item.getInstructions()));
+        }
+        return models;
     }
 
     public static MedicalRecord toModel(MedicalRecordEntity e) {

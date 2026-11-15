@@ -7,7 +7,6 @@ import com.clinic.shared.dto.ApiResponse;
 import com.clinic.shared.dto.TestResultRequest;
 import com.clinic.shared.model.Patient;
 import com.clinic.shared.model.PatientStatus;
-import com.clinic.shared.model.User;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -30,9 +29,6 @@ import javafx.scene.layout.VBox;
 import java.rmi.RemoteException;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 public class TestingView implements RefreshableView {
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
@@ -40,7 +36,6 @@ public class TestingView implements RefreshableView {
     private final AppContext appContext;
     private final ObservableList<Patient> waitingPatients = FXCollections.observableArrayList();
 
-    private Map<String, User> usersById = Map.of();
     private TableView<Patient> table;
     private Label selectedPatientLabel;
     private Label statusLabel;
@@ -124,7 +119,7 @@ public class TestingView implements RefreshableView {
         phoneColumn.setCellValueFactory(data -> new SimpleStringProperty(safe(data.getValue().getPhone())));
 
         TableColumn<Patient, String> doctorColumn = new TableColumn<>("Bác sĩ");
-        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(doctorName(data.getValue().getAssignedDoctorId())));
+        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(safe(data.getValue().getAssignedDoctorName())));
 
         TableColumn<Patient, String> visitColumn = new TableColumn<>("Lần khám");
         visitColumn.setCellValueFactory(data -> new SimpleStringProperty(formatDateTime(data.getValue())));
@@ -213,12 +208,7 @@ public class TestingView implements RefreshableView {
 
     private void loadData() {
         try {
-            List<User> users = appContext.getService().getAllUsers();
-            usersById = users.stream().collect(Collectors.toMap(User::getId, Function.identity(), (a, b) -> a));
-
-            List<Patient> waiting = appContext.getService().getAllPatients().stream()
-                    .filter(patient -> PatientStatus.WAITING_FOR_TEST.equalsIgnoreCase(safe(patient.getStatus())))
-                    .toList();
+            List<Patient> waiting = appContext.getService().getPatientsByStatus(PatientStatus.WAITING_FOR_TEST);
             waitingPatients.setAll(waiting);
             setStatus("Đã tải " + waiting.size() + " bệnh nhân chờ xét nghiệm.", false);
         } catch (RemoteException e) {
@@ -258,7 +248,7 @@ public class TestingView implements RefreshableView {
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
                 clearForm();
-                loadData();
+                appContext.reloadAfterLocalChange(this::loadData);
             }
         } catch (RemoteException e) {
             showError("Không thể lưu kết quả xét nghiệm", e.getMessage());
@@ -271,7 +261,7 @@ public class TestingView implements RefreshableView {
             selectedPatientLabel.setText("Chưa chọn bệnh nhân");
             return;
         }
-        selectedPatientLabel.setText(safe(patient.getCode()) + " · " + safe(patient.getFullName()) + " · Bác sĩ: " + doctorName(patient.getAssignedDoctorId()));
+        selectedPatientLabel.setText(safe(patient.getCode()) + " · " + safe(patient.getFullName()) + " · Bác sĩ: " + safe(patient.getAssignedDoctorName()));
         setStatus("Đã chọn bệnh nhân " + safe(patient.getCode()) + ".", false);
     }
 
@@ -285,14 +275,6 @@ public class TestingView implements RefreshableView {
         resultArea.clear();
         notesArea.clear();
         setStatus("Đã xóa form kết quả.", false);
-    }
-
-    private String doctorName(String doctorId) {
-        if (isBlank(doctorId)) {
-            return "";
-        }
-        User doctor = usersById.get(doctorId);
-        return doctor == null ? "" : safe(doctor.getFullName());
     }
 
     private String currentTestingStaffId() {

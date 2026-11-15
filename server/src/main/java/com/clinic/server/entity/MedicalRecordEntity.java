@@ -1,18 +1,46 @@
 package com.clinic.server.entity;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
-import java.time.LocalDateTime;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.Table;
 
-@Document("medical_records")
+import java.time.LocalDateTime;
+import java.util.UUID;
+
+@Entity
+@Table(name = "medical_records", indexes = {
+        @Index(name = "idx_records_patient", columnList = "patient_id"),
+        @Index(name = "idx_records_doctor", columnList = "doctor_id")
+})
 public class MedicalRecordEntity {
     @Id
+    @Column(length = 36)
     private String id;
+
+    @Column(name = "patient_id", nullable = false, length = 36)
     private String patientId;
+
+    @Column(name = "doctor_id", nullable = false, length = 36)
     private String doctorId;
+
+    @Column(columnDefinition = "TEXT")
     private String diagnosis;
+
+    @Column(columnDefinition = "TEXT")
     private String notes;
+
+    @Column(name = "created_at")
     private LocalDateTime createdAt;
+
+    @PrePersist
+    public void assignId() {
+        if (id == null || id.isBlank()) {
+            id = UUID.randomUUID().toString();
+        }
+    }
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }

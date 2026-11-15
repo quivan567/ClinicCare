@@ -1,6 +1,7 @@
 package com.clinic.client.ui.view;
 
 import com.clinic.client.ui.core.AppContext;
+import com.clinic.client.ui.core.RefreshableView;
 import com.clinic.client.ui.theme.AppTheme;
 import com.clinic.shared.dto.ApiResponse;
 import com.clinic.shared.dto.UserRequest;
@@ -30,7 +31,7 @@ import javafx.scene.layout.VBox;
 import java.rmi.RemoteException;
 import java.util.List;
 
-public class AdminUsersView {
+public class AdminUsersView implements RefreshableView {
     private final AppContext appContext;
     private final ObservableList<User> users = FXCollections.observableArrayList();
 
@@ -208,6 +209,11 @@ public class AdminUsersView {
         field.setStyle(AppTheme.inputStyle());
     }
 
+    @Override
+    public void refreshData() {
+        loadUsers();
+    }
+
     private void loadUsers() {
         try {
             List<User> result = appContext.getService().getAllUsers();
@@ -243,7 +249,7 @@ public class AdminUsersView {
                     : appContext.getService().updateUser(request);
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
-                loadUsers();
+                appContext.reloadAfterLocalChange(this::loadUsers);
                 clearForm();
             }
         } catch (RemoteException e) {
@@ -266,7 +272,7 @@ public class AdminUsersView {
             ApiResponse response = appContext.getService().deleteUser(selected.getId());
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
-                loadUsers();
+                appContext.reloadAfterLocalChange(this::loadUsers);
                 clearForm();
             }
         } catch (RemoteException e) {
