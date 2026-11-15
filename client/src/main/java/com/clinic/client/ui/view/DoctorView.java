@@ -2,9 +2,12 @@ package com.clinic.client.ui.view;
 
 import com.clinic.client.ui.core.AppContext;
 import com.clinic.client.ui.core.RefreshableView;
+import com.clinic.client.ui.core.UiBackground;
 import com.clinic.client.ui.theme.AppTheme;
 import com.clinic.shared.dto.ApiResponse;
 import com.clinic.shared.dto.MedicalRecordRequest;
+import com.clinic.shared.dto.MedicalRecordSuggestion;
+import com.clinic.shared.dto.PatientSummaryResponse;
 import com.clinic.shared.model.Patient;
 import com.clinic.shared.model.PatientStatus;
 import javafx.beans.property.SimpleStringProperty;
@@ -41,10 +44,14 @@ public class DoctorView implements RefreshableView {
     private TableView<Patient> myPatientsTable;
     private Label selectedPatientLabel;
     private Label statusLabel;
+    private TextArea summaryArea;
     private TextArea diagnosisArea;
     private TextArea notesArea;
     private CheckBox requiresTestCheckBox;
+    private Button summaryButton;
+    private Button suggestButton;
     private Patient selectedPatient;
+    private boolean aiBusy;
 
     public DoctorView(AppContext appContext) {
         this.appContext = appContext;
@@ -175,6 +182,15 @@ public class DoctorView implements RefreshableView {
         selectedPatientLabel.setWrapText(true);
         selectedPatientLabel.setStyle("-fx-text-fill: " + AppTheme.PRIMARY_DARK + "; -fx-font-weight: bold;");
 
+        summaryArea = createTextArea("Tóm tắt hồ sơ sẽ hiện ở đây");
+        summaryArea.setEditable(false);
+        summaryArea.setPrefRowCount(4);
+
+        summaryButton = new Button("Tóm tắt");
+        summaryButton.setPrefHeight(38);
+        summaryButton.setStyle(AppTheme.secondaryButtonStyle());
+        summaryButton.setOnAction(event -> summarizeSelectedPatient());
+
         GridPane form = new GridPane();
         form.setHgap(12);
         form.setVgap(12);
@@ -191,6 +207,11 @@ public class DoctorView implements RefreshableView {
         HBox actions = new HBox(10);
         actions.setAlignment(Pos.CENTER_RIGHT);
 
+        suggestButton = new Button("Gợi ý từ ghi chú");
+        suggestButton.setPrefHeight(38);
+        suggestButton.setStyle(AppTheme.secondaryButtonStyle());
+        suggestButton.setOnAction(event -> suggestFromNotes());
+
         Button clearButton = new Button("Xóa form");
         clearButton.setPrefHeight(38);
         clearButton.setStyle(AppTheme.secondaryButtonStyle());
@@ -201,13 +222,13 @@ public class DoctorView implements RefreshableView {
         saveButton.setStyle(AppTheme.primaryButtonStyle());
         saveButton.setOnAction(event -> createMedicalRecord());
 
-        actions.getChildren().addAll(clearButton, saveButton);
+        actions.getChildren().addAll(suggestButton, clearButton, saveButton);
 
         statusLabel = new Label("Chọn bệnh nhân đang khám để tạo hồ sơ.");
         statusLabel.setWrapText(true);
         statusLabel.setStyle("-fx-text-fill: " + AppTheme.MUTED + ";");
 
-        card.getChildren().addAll(title, selectedPatientLabel, form, actions, statusLabel);
+        card.getChildren().addAll(title, selectedPatientLabel, summaryArea, summaryButton, form, actions, statusLabel);
         return card;
     }
 
@@ -310,8 +331,89 @@ public class DoctorView implements RefreshableView {
         }
     }
 
+    private void summarizeSelectedPatient() {
+        if (aiBusy) {
+            return;
+        }
+        if (selectedPatient == null) {
+            setStatus("Vui lòng chọn bệnh nhân cần tóm tắt.", true);
+            return;
+        }
+        String patientKey = isBlank(selectedPatient.getCode()) ? selectedPatient.getId() : selectedPatient.getCode();
+        String doctorId = currentDoctorId();
+        setAiBusy(true);
+        setStatus("Đang hỏi trợ lý AI...", false);
+        UiBackground.call(
+                () -> appContext.getService().summarizePatient(patientKey, doctorId),
+                this::applySummary,
+                error -> {
+                    setAiBusy(false);
+                    setStatus(error.getMessage() == null ? "Không thể tóm tắt hồ sơ." : error.getMessage(), true);
+                });
+    }
+
+    private void applySummary(PatientSummaryResponse response) {
+        setAiBusy(false);
+        if (response == null || !response.isSuccess()) {
+            setStatus(response == null ? "Không thể tóm tắt hồ sơ." : response.getMessage(), true);
+            return;
+        }
+        summaryArea.setText(safe(response.getSummary()));
+        setStatus(response.getMessage(), false);
+    }
+
+    private void suggestFromNotes() {
+        if (aiBusy) {
+            return;
+        }
+        if (isBlank(notesArea.getText())) {
+            setStatus("Nhập ghi chú trước khi xin gợi ý.", true);
+            return;
+        }
+        String notes = notesArea.getText().trim();
+        String doctorId = currentDoctorId();
+        setAiBusy(true);
+        setStatus("Đang hỏi trợ lý AI...", false);
+        UiBackground.call(
+                () -> appContext.getService().suggestMedicalRecord(doctorId, notes),
+                this::applySuggestion,
+                error -> {
+                    setAiBusy(false);
+                    setStatus(error.getMessage() == null ? "Không thể tạo gợi ý." : error.getMessage(), true);
+                });
+    }
+
+    private void applySuggestion(MedicalRecordSuggestion suggestion) {
+        setAiBusy(false);
+        if (suggestion == null || !suggestion.isSuccess()) {
+            setStatus(suggestion == null ? "Không thể tạo gợi ý." : suggestion.getMessage(), true);
+            return;
+        }
+        if (!isBlank(suggestion.getDiagnosis())) {
+            diagnosisArea.setText(suggestion.getDiagnosis().trim());
+        }
+        if (!isBlank(suggestion.getNotes())) {
+            notesArea.setText(suggestion.getNotes().trim());
+        }
+        requiresTestCheckBox.setSelected(suggestion.isRequiresTest());
+        setStatus(suggestion.getMessage(), false);
+    }
+
+    private void setAiBusy(boolean busy) {
+        aiBusy = busy;
+        if (summaryButton != null) {
+            summaryButton.setDisable(busy);
+        }
+        if (suggestButton != null) {
+            suggestButton.setDisable(busy);
+        }
+    }
+
     private void selectPatient(Patient patient) {
         selectedPatient = patient;
+        if (summaryArea != null) {
+            summaryArea.clear();
+        }
         if (patient == null) {
             selectedPatientLabel.setText("Chưa chọn bệnh nhân");
             return;
