@@ -13,6 +13,7 @@ import com.clinic.shared.model.Role;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -26,6 +27,7 @@ public class ConfigDataLoader {
     private static final String TESTING_STAFF_ID = "testing-staff-1";
 
     @Bean
+    @Order(1)
     CommandLineRunner initData(UserRepository userRepository,
                                PatientRepository patientRepository,
                                PrescriptionRepository prescriptionRepository) {
@@ -110,7 +112,7 @@ public class ConfigDataLoader {
         p.setCode(String.format("DT%03d", prescriptionSeedCounter++));
         p.setPatientId(patientId);
         p.setDoctorId(doctorId);
-        p.setItems(List.of(new PrescriptionItem(medicineName, dosage, instructions)));
+        p.replaceItems(List.of(new PrescriptionItem(medicineName, dosage, instructions)));
         p.setStatus(status);
         p.setCreatedAt(LocalDateTime.now());
         return p;

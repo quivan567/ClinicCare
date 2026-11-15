@@ -69,7 +69,7 @@ public class LoginView {
         loginButton.setMaxWidth(Double.MAX_VALUE);
         loginButton.setStyle(AppTheme.primaryButtonStyle());
 
-        Label statusLabel = new Label("Nhập tài khoảng và mật khẩu để đăng nhập");
+        Label statusLabel = new Label("Nhập tài khoản và mật khẩu để đăng nhập");
         statusLabel.setWrapText(true);
         statusLabel.setStyle("-fx-text-fill: " + AppTheme.MUTED + ";");
 

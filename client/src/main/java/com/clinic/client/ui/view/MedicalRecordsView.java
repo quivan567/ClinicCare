@@ -4,9 +4,7 @@ import com.clinic.client.ui.core.AppContext;
 import com.clinic.client.ui.core.RefreshableView;
 import com.clinic.client.ui.theme.AppTheme;
 import com.clinic.shared.model.MedicalRecord;
-import com.clinic.shared.model.Patient;
 import com.clinic.shared.model.Role;
-import com.clinic.shared.model.User;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -29,9 +27,6 @@ import javafx.scene.layout.VBox;
 import java.rmi.RemoteException;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 public class MedicalRecordsView implements RefreshableView {
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
@@ -40,8 +35,6 @@ public class MedicalRecordsView implements RefreshableView {
     private final ObservableList<MedicalRecord> allRecords = FXCollections.observableArrayList();
     private final ObservableList<MedicalRecord> filteredRecords = FXCollections.observableArrayList();
 
-    private Map<String, Patient> patientsById = Map.of();
-    private Map<String, User> usersById = Map.of();
     private TableView<MedicalRecord> table;
     private TextField searchField;
     private Label selectedRecordLabel;
@@ -137,10 +130,10 @@ public class MedicalRecordsView implements RefreshableView {
         table.setPrefHeight(520);
 
         TableColumn<MedicalRecord, String> patientColumn = new TableColumn<>("Bệnh nhân");
-        patientColumn.setCellValueFactory(data -> new SimpleStringProperty(patientLabel(data.getValue().getPatientId())));
+        patientColumn.setCellValueFactory(data -> new SimpleStringProperty(patientLabel(data.getValue())));
 
         TableColumn<MedicalRecord, String> doctorColumn = new TableColumn<>("Bác sĩ");
-        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(doctorName(data.getValue().getDoctorId())));
+        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(doctorName(data.getValue())));
 
         TableColumn<MedicalRecord, String> diagnosisColumn = new TableColumn<>("Chẩn đoán");
         diagnosisColumn.setCellValueFactory(data -> new SimpleStringProperty(safe(data.getValue().getDiagnosis())));
@@ -232,11 +225,6 @@ public class MedicalRecordsView implements RefreshableView {
 
     private void loadData() {
         try {
-            patientsById = appContext.getService().getAllPatients().stream()
-                    .collect(Collectors.toMap(Patient::getId, Function.identity(), (a, b) -> a));
-            usersById = appContext.getService().getAllUsers().stream()
-                    .collect(Collectors.toMap(User::getId, Function.identity(), (a, b) -> a));
-
             List<MedicalRecord> records = isCurrentUserDoctor()
                     ? appContext.getService().getMedicalRecordsByDoctor(appContext.getCurrentUser().getId())
                     : appContext.getService().getAllMedicalRecords();
@@ -256,8 +244,8 @@ public class MedicalRecordsView implements RefreshableView {
         }
 
         filteredRecords.setAll(allRecords.stream()
-                .filter(record -> contains(patientLabel(record.getPatientId()), keyword)
-                        || contains(doctorName(record.getDoctorId()), keyword)
+                .filter(record -> contains(patientLabel(record), keyword)
+                        || contains(doctorName(record), keyword)
                         || contains(record.getDiagnosis(), keyword)
                         || contains(record.getNotes(), keyword))
                 .toList());
@@ -270,12 +258,12 @@ public class MedicalRecordsView implements RefreshableView {
             return;
         }
         selectedRecordLabel.setText("Hồ sơ " + safe(record.getId()));
-        patientInfoLabel.setText(patientLabel(record.getPatientId()));
-        doctorInfoLabel.setText(doctorName(record.getDoctorId()));
+        patientInfoLabel.setText(patientLabel(record));
+        doctorInfoLabel.setText(doctorName(record));
         createdAtLabel.setText(formatDateTime(record));
         diagnosisArea.setText(safe(record.getDiagnosis()));
         notesArea.setText(safe(record.getNotes()));
-        setStatus("Đang xem hồ sơ của " + patientLabel(record.getPatientId()) + ".", false);
+        setStatus("Đang xem hồ sơ của " + patientLabel(record) + ".", false);
     }
 
     private void clearDetail() {
@@ -303,17 +291,22 @@ public class MedicalRecordsView implements RefreshableView {
         return appContext.getCurrentUser() != null && appContext.getCurrentUser().getRole() == Role.DOCTOR;
     }
 
-    private String patientLabel(String patientId) {
-        Patient patient = patientsById.get(patientId);
-        if (patient == null) {
+    private String patientLabel(MedicalRecord record) {
+        if (record == null) {
             return "";
         }
-        return safe(patient.getCode()) + " · " + safe(patient.getFullName());
+        if (isBlank(record.getPatientName())) {
+            return safe(record.getPatientCode());
+        }
+        return safe(record.getPatientCode()) + " · " + safe(record.getPatientName());
     }
 
-    private String doctorName(String doctorId) {
-        User doctor = usersById.get(doctorId);
-        return doctor == null ? "" : safe(doctor.getFullName());
+    private String doctorName(MedicalRecord record) {
+        return record == null ? "" : safe(record.getDoctorName());
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private String formatDateTime(MedicalRecord record) {

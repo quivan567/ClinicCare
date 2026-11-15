@@ -45,8 +45,8 @@ public class ClinicApplication extends Application {
             appContext = new AppContext(RmiServiceClient.connect(SERVICE_URL), this::showLogin);
             realtimeClient = new RealtimeClient(WEBSOCKET_URL);
             realtimeClient.connect(event -> {
-                if (mainLayout != null) {
-                    mainLayout.refreshActiveContent();
+                if (mainLayout != null && event != null) {
+                    mainLayout.onRealtimeEvent(event.getType());
                 }
             });
             showLogin();

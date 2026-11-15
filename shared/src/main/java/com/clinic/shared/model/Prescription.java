@@ -12,8 +12,10 @@ public class Prescription implements Serializable {
     private String code;
     private String patientId;
     private String patientCode;
+    private String patientName;
     private String doctorId;
     private String doctorCode;
+    private String doctorName;
     private List<PrescriptionItem> items = new ArrayList<>();
     private String status;
     private LocalDateTime createdAt;
@@ -38,10 +40,14 @@ public class Prescription implements Serializable {
     public void setPatientId(String patientId) { this.patientId = patientId; }
     public String getPatientCode() { return patientCode; }
     public void setPatientCode(String patientCode) { this.patientCode = patientCode; }
+    public String getPatientName() { return patientName; }
+    public void setPatientName(String patientName) { this.patientName = patientName; }
     public String getDoctorId() { return doctorId; }
     public void setDoctorId(String doctorId) { this.doctorId = doctorId; }
     public String getDoctorCode() { return doctorCode; }
     public void setDoctorCode(String doctorCode) { this.doctorCode = doctorCode; }
+    public String getDoctorName() { return doctorName; }
+    public void setDoctorName(String doctorName) { this.doctorName = doctorName; }
     public List<PrescriptionItem> getItems() { return items; }
     public void setItems(List<PrescriptionItem> items) { this.items = items; }
     public String getMedicineName() { return items == null || items.isEmpty() ? "" : items.get(0).getMedicineName(); }

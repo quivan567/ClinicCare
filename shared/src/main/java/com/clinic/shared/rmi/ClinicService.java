@@ -47,6 +47,8 @@ public interface ClinicService extends Remote {
 
     List<Patient> getWaitingPatientsByDoctor(String doctorId) throws RemoteException;
 
+    List<Patient> getPatientsByStatus(String status) throws RemoteException;
+
     ApiResponse acceptPatient(String patientCode, String doctorId) throws RemoteException;
 
     List<Patient> searchPatients(SearchPatientRequest request) throws RemoteException;

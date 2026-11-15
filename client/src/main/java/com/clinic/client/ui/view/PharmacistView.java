@@ -5,11 +5,10 @@ import com.clinic.client.ui.core.RefreshableView;
 import com.clinic.client.ui.theme.AppTheme;
 import com.clinic.shared.dto.ApiResponse;
 import com.clinic.shared.dto.DispensePrescriptionRequest;
-import com.clinic.shared.model.Patient;
+import com.clinic.shared.dto.PrescriptionSearchRequest;
 import com.clinic.shared.model.Prescription;
 import com.clinic.shared.model.PrescriptionItem;
 import com.clinic.shared.model.PrescriptionStatus;
-import com.clinic.shared.model.User;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -30,9 +29,6 @@ import javafx.scene.layout.VBox;
 import java.rmi.RemoteException;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 public class PharmacistView implements RefreshableView {
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
@@ -41,8 +37,6 @@ public class PharmacistView implements RefreshableView {
     private final ObservableList<Prescription> prescriptions = FXCollections.observableArrayList();
     private final ObservableList<PrescriptionItem> prescriptionItems = FXCollections.observableArrayList();
 
-    private Map<String, Patient> patientsById = Map.of();
-    private Map<String, User> usersById = Map.of();
     private TableView<Prescription> prescriptionTable;
     private TableView<PrescriptionItem> itemTable;
     private Label selectedPrescriptionLabel;
@@ -120,7 +114,7 @@ public class PharmacistView implements RefreshableView {
         patientColumn.setCellValueFactory(data -> new SimpleStringProperty(patientLabel(data.getValue())));
 
         TableColumn<Prescription, String> doctorColumn = new TableColumn<>("Bác sĩ");
-        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(doctorName(data.getValue().getDoctorId())));
+        doctorColumn.setCellValueFactory(data -> new SimpleStringProperty(doctorName(data.getValue())));
 
         TableColumn<Prescription, String> itemCountColumn = new TableColumn<>("Số thuốc");
         itemCountColumn.setCellValueFactory(data -> new SimpleStringProperty(String.valueOf(itemCount(data.getValue()))));
@@ -213,14 +207,8 @@ public class PharmacistView implements RefreshableView {
 
     private void loadData() {
         try {
-            patientsById = appContext.getService().getAllPatients().stream()
-                    .collect(Collectors.toMap(Patient::getId, Function.identity(), (a, b) -> a));
-            usersById = appContext.getService().getAllUsers().stream()
-                    .collect(Collectors.toMap(User::getId, Function.identity(), (a, b) -> a));
-
-            List<Prescription> waitingPrescriptions = appContext.getService().getPrescriptions().stream()
-                    .filter(prescription -> PrescriptionStatus.NEW.equalsIgnoreCase(safe(prescription.getStatus())))
-                    .toList();
+            List<Prescription> waitingPrescriptions = appContext.getService().getPrescriptionsByStatus(
+                    new PrescriptionSearchRequest("", "", PrescriptionStatus.NEW));
             prescriptions.setAll(waitingPrescriptions);
             clearSelection();
             setStatus("Đã tải " + waitingPrescriptions.size() + " toa thuốc chờ cấp phát.", false);
@@ -238,7 +226,7 @@ public class PharmacistView implements RefreshableView {
 
         selectedPrescriptionLabel.setText(safe(prescription.getCode()) + " · " + safe(prescription.getStatus()));
         patientInfoLabel.setText(patientLabel(prescription));
-        doctorInfoLabel.setText(doctorName(prescription.getDoctorId()));
+        doctorInfoLabel.setText(doctorName(prescription));
         prescriptionItems.setAll(prescription.getItems() == null ? List.of() : prescription.getItems());
         setStatus("Đã chọn toa " + safe(prescription.getCode()) + ".", false);
     }
@@ -259,7 +247,7 @@ public class PharmacistView implements RefreshableView {
             );
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
-                loadData();
+                appContext.reloadAfterLocalChange(this::loadData);
             }
         } catch (RemoteException e) {
             showError("Không thể cấp phát thuốc", e.getMessage());
@@ -281,19 +269,21 @@ public class PharmacistView implements RefreshableView {
     }
 
     private String patientLabel(Prescription prescription) {
-        Patient patient = patientsById.get(prescription.getPatientId());
-        if (patient == null) {
-            return safe(prescription.getPatientCode());
-        }
-        return safe(patient.getCode()) + " · " + safe(patient.getFullName());
-    }
-
-    private String doctorName(String doctorId) {
-        if (doctorId == null || doctorId.isBlank()) {
+        if (prescription == null) {
             return "";
         }
-        User doctor = usersById.get(doctorId);
-        return doctor == null ? "" : safe(doctor.getFullName());
+        if (isBlank(prescription.getPatientName())) {
+            return safe(prescription.getPatientCode());
+        }
+        return safe(prescription.getPatientCode()) + " · " + safe(prescription.getPatientName());
+    }
+
+    private String doctorName(Prescription prescription) {
+        return prescription == null ? "" : safe(prescription.getDoctorName());
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private int itemCount(Prescription prescription) {

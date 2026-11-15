@@ -7,6 +7,16 @@ public class AppContext {
     private final ClinicService service;
     private final Runnable logoutHandler;
     private User currentUser;
+    private long suppressRealtimeUntil;
+
+    public void reloadAfterLocalChange(Runnable reload) {
+        reload.run();
+        suppressRealtimeUntil = System.currentTimeMillis() + 1200;
+    }
+
+    public boolean isRealtimeSuppressed() {
+        return System.currentTimeMillis() < suppressRealtimeUntil;
+    }
 
     public AppContext(ClinicService service, Runnable logoutHandler) {
         this.service = service;

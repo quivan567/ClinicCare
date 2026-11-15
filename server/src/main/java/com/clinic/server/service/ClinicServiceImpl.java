@@ -37,13 +37,21 @@ import com.clinic.shared.model.TestResult;
 import com.clinic.shared.model.User;
 import com.clinic.shared.rmi.ClinicService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
@@ -54,12 +62,16 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
     private final PrescriptionRepository prescriptionRepository;
     private final TestResultRepository testResultRepository;
     private final RealtimeEventPublisher realtimeEventPublisher;
+    private final TransactionTemplate transactionTemplate;
+    private final JdbcTemplate jdbcTemplate;
 
     @Autowired
     public ClinicServiceImpl(UserRepository userRepository, PatientRepository patientRepository,
                              MedicalRecordRepository medicalRecordRepository, PrescriptionRepository prescriptionRepository,
                              TestResultRepository testResultRepository,
-                             RealtimeEventPublisher realtimeEventPublisher) throws RemoteException {
+                             RealtimeEventPublisher realtimeEventPublisher,
+                             PlatformTransactionManager transactionManager,
+                             JdbcTemplate jdbcTemplate) throws RemoteException {
         super();
         this.userRepository = userRepository;
         this.patientRepository = patientRepository;
@@ -67,6 +79,8 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
         this.prescriptionRepository = prescriptionRepository;
         this.testResultRepository = testResultRepository;
         this.realtimeEventPublisher = realtimeEventPublisher;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Override
@@ -197,13 +211,13 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
         if (patient == null) {
             return new ApiResponse(false, "Không tìm thấy bệnh nhân");
         }
-        if (!medicalRecordRepository.findByPatientId(patient.getId()).isEmpty()) {
+        if (medicalRecordRepository.existsByPatientId(patient.getId())) {
             return new ApiResponse(false, "Không thể xóa bệnh nhân vì còn hồ sơ bệnh án liên quan");
         }
-        if (!prescriptionRepository.findByPatientId(patient.getId()).isEmpty()) {
+        if (prescriptionRepository.existsByPatientId(patient.getId())) {
             return new ApiResponse(false, "Không thể xóa bệnh nhân vì còn toa thuốc liên quan");
         }
-        if (!testResultRepository.findByPatientId(patient.getId()).isEmpty()) {
+        if (testResultRepository.existsByPatientId(patient.getId())) {
             return new ApiResponse(false, "Không thể xóa bệnh nhân vì còn kết quả xét nghiệm liên quan");
         }
         if (patient.getLastVisitAt() == null) {
@@ -219,29 +233,31 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public List<Patient> getAllPatients() {
-        return patientRepository.findAll().stream().map(Mapper::toModel).collect(Collectors.toList());
+        return toPatients(patientRepository.findAll());
     }
 
     @Override
     public List<Patient> getPatientsByDoctor(String doctorId) {
-        return patientRepository.findAll().stream()
-                .map(Mapper::toModel)
-                .filter(p -> doctorId.equals(p.getAssignedDoctorId()))
-                .collect(Collectors.toList());
+        return toPatients(patientRepository.findByAssignedDoctorId(doctorId));
     }
 
     @Override
     public List<Patient> getWaitingPatientsByDoctor(String doctorId) {
-        return patientRepository.findAll().stream()
-                .map(Mapper::toModel)
-                .filter(p -> doctorId.equals(p.getAssignedDoctorId()))
-                .filter(p -> p.getStatus() != null && (p.getStatus().equalsIgnoreCase(PatientStatus.WAITING) || p.getStatus().equalsIgnoreCase(PatientStatus.ASSIGNED)))
-                .collect(Collectors.toList());
+        return toPatients(patientRepository.findByAssignedDoctorIdAndStatusIn(
+                doctorId, List.of(PatientStatus.WAITING, PatientStatus.ASSIGNED)));
+    }
+
+    @Override
+    public List<Patient> getPatientsByStatus(String status) {
+        if (isBlank(status)) {
+            return List.of();
+        }
+        return toPatients(patientRepository.findByStatus(status.trim()));
     }
 
     @Override
     public ApiResponse acceptPatient(String patientCode, String doctorId) {
-        PatientEntity patient = patientRepository.findByCode(patientCode).orElseGet(() -> patientRepository.findById(patientCode).orElse(null));
+        PatientEntity patient = findPatient(patientCode);
         if (patient == null) {
             return new ApiResponse(false, "Không tìm thấy bệnh nhân");
         }
@@ -260,19 +276,16 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public List<Patient> searchPatients(SearchPatientRequest request) {
-        String keyword = request.getKeyword() == null ? "" : request.getKeyword().toLowerCase();
-        return patientRepository.findAll().stream()
-                .map(Mapper::toModel)
-                .filter(p -> p.getCode().toLowerCase().contains(keyword)
-                        || p.getFullName().toLowerCase().contains(keyword)
-                        || (p.getPhone() != null && p.getPhone().contains(keyword))
-                        || (p.getStatus() != null && p.getStatus().toLowerCase().contains(keyword)))
-                .collect(Collectors.toList());
+        String keyword = request.getKeyword() == null ? "" : request.getKeyword().trim();
+        if (keyword.isEmpty()) {
+            return getAllPatients();
+        }
+        return toPatients(patientRepository.searchByKeyword(likeContains(keyword)));
     }
 
     @Override
     public ApiResponse assignDoctor(AssignDoctorRequest request) {
-        PatientEntity target = patientRepository.findByCode(request.getPatientId()).orElseGet(() -> patientRepository.findById(request.getPatientId()).orElse(null));
+        PatientEntity target = findPatient(request.getPatientId());
         if (target == null) {
             return new ApiResponse(false, "Không tìm thấy bệnh nhân");
         }
@@ -289,7 +302,7 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public ApiResponse createMedicalRecord(MedicalRecordRequest request) {
-        PatientEntity patient = patientRepository.findByCode(request.getPatientId()).orElseGet(() -> patientRepository.findById(request.getPatientId()).orElse(null));
+        PatientEntity patient = findPatient(request.getPatientId());
         if (patient == null) {
             return new ApiResponse(false, "Không tìm thấy bệnh nhân");
         }
@@ -333,32 +346,26 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public List<MedicalRecord> getAllMedicalRecords() {
-        return medicalRecordRepository.findAll().stream()
-                .map(Mapper::toModel)
-                .collect(Collectors.toList());
+        return toMedicalRecords(medicalRecordRepository.findAll());
     }
 
     @Override
     public List<MedicalRecord> getMedicalRecordsByPatient(String patientId) {
-        PatientEntity patient = patientRepository.findByCode(patientId).orElseGet(() -> patientRepository.findById(patientId).orElse(null));
+        PatientEntity patient = findPatient(patientId);
         if (patient == null) {
             return List.of();
         }
-        return medicalRecordRepository.findByPatientId(patient.getId()).stream()
-                .map(Mapper::toModel)
-                .collect(Collectors.toList());
+        return toMedicalRecords(medicalRecordRepository.findByPatientId(patient.getId()));
     }
 
     @Override
     public List<MedicalRecord> getMedicalRecordsByDoctor(String doctorId) {
-        return medicalRecordRepository.findByDoctorId(doctorId).stream()
-                .map(Mapper::toModel)
-                .collect(Collectors.toList());
+        return toMedicalRecords(medicalRecordRepository.findByDoctorId(doctorId));
     }
 
     @Override
     public ApiResponse createPrescription(CreatePrescriptionRequest request) {
-        PatientEntity patient = patientRepository.findByCode(request.getPatientId()).orElseGet(() -> patientRepository.findById(request.getPatientId()).orElse(null));
+        PatientEntity patient = findPatient(request.getPatientId());
         if (patient == null) {
             return new ApiResponse(false, "Không tìm thấy bệnh nhân");
         }
@@ -384,7 +391,7 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
         p.setCode(generateNextPrescriptionCode());
         p.setPatientId(patient.getId());
         p.setDoctorId(request.getDoctorId());
-        p.setItems(request.getItems());
+        p.replaceItems(request.getItems());
         p.setStatus(PrescriptionStatus.NEW);
         p.setCreatedAt(LocalDateTime.now());
         prescriptionRepository.save(p);
@@ -399,74 +406,95 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public List<Prescription> getPrescriptions() {
-        return prescriptionRepository.findAll().stream()
-                .map(Mapper::toModel)
-                .peek(this::enrichPrescription)
-                .collect(Collectors.toList());
+        return toPrescriptions(prescriptionRepository.findAll());
     }
 
     @Override
     public List<Patient> getExaminedPatientsWithPrescriptions() {
-        var patientIds = prescriptionRepository.findAll().stream()
+        List<PatientEntity> candidates = patientRepository.findByStatusIn(List.of(
+                PatientStatus.EXAMINED, PatientStatus.PRESCRIBED, PatientStatus.COMPLETED));
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+        Set<String> patientIds = candidates.stream().map(PatientEntity::getId).collect(Collectors.toSet());
+        Set<String> withPrescription = prescriptionRepository.findByPatientIdIn(patientIds).stream()
                 .map(PrescriptionEntity::getPatientId)
                 .collect(Collectors.toSet());
-        return patientRepository.findAll().stream()
-                .filter(p -> patientIds.contains(p.getId()))
-                .filter(p -> p.getStatus() != null && (
-                        p.getStatus().equalsIgnoreCase(PatientStatus.EXAMINED)
-                                || p.getStatus().equalsIgnoreCase(PatientStatus.PRESCRIBED)
-                                || p.getStatus().equalsIgnoreCase(PatientStatus.COMPLETED)
-                ))
-                .map(Mapper::toModel)
-                .collect(Collectors.toList());
+        List<PatientEntity> matched = candidates.stream()
+                .filter(patient -> withPrescription.contains(patient.getId()))
+                .toList();
+        return toPatients(matched);
     }
 
     @Override
     public List<Prescription> getPrescriptionsByDoctor(String doctorId) {
-        return prescriptionRepository.findAll().stream()
-                .map(Mapper::toModel)
-                .peek(this::enrichPrescription)
-                .filter(p -> doctorId.equals(p.getDoctorId()))
-                .collect(Collectors.toList());
+        return toPrescriptions(prescriptionRepository.findByDoctorId(doctorId));
     }
 
     @Override
     public List<Prescription> getPrescriptionsByStatus(PrescriptionSearchRequest request) {
-        String patientCode = request.getPatientCode() == null ? "" : request.getPatientCode().trim().toLowerCase();
-        String doctorKeyword = request.getDoctorKeyword() == null ? "" : request.getDoctorKeyword().trim().toLowerCase();
-        String status = request.getStatus() == null ? "" : request.getStatus().trim().toLowerCase();
+        String patientCode = request.getPatientCode() == null ? "" : request.getPatientCode().trim();
+        String doctorKeyword = request.getDoctorKeyword() == null ? "" : request.getDoctorKeyword().trim();
+        String status = request.getStatus() == null ? "" : request.getStatus().trim();
 
-        return prescriptionRepository.findAll().stream()
-                .filter(p -> {
-                    PatientEntity patient = patientRepository.findById(p.getPatientId()).orElse(null);
-                    UserEntity doctor = userRepository.findById(p.getDoctorId()).orElse(null);
+        List<String> patientIds = null;
+        if (!patientCode.isEmpty()) {
+            patientIds = patientRepository.findByCodePattern(likeContains(patientCode)).stream()
+                    .map(PatientEntity::getId)
+                    .toList();
+            if (patientIds.isEmpty()) {
+                return List.of();
+            }
+        }
 
-                    boolean matchesPatient = patientCode.isBlank() || (patient != null && patient.getCode() != null && patient.getCode().toLowerCase().contains(patientCode));
-                    boolean matchesDoctor = doctorKeyword.isBlank() || (doctor != null && (
-                            (doctor.getUsername() != null && doctor.getUsername().toLowerCase().contains(doctorKeyword))
-                                    || (doctor.getFullName() != null && doctor.getFullName().toLowerCase().contains(doctorKeyword))
-                    ));
-                    boolean matchesStatus = status.isBlank() || (p.getStatus() != null && p.getStatus().toLowerCase().contains(status));
+        List<String> doctorIds = null;
+        if (!doctorKeyword.isEmpty()) {
+            doctorIds = userRepository.findByUsernameOrFullName(likeContains(doctorKeyword)).stream()
+                    .map(UserEntity::getId)
+                    .toList();
+            if (doctorIds.isEmpty()) {
+                return List.of();
+            }
+        }
 
-                    return matchesPatient && matchesDoctor && matchesStatus;
-                })
-                .map(Mapper::toModel)
-                .peek(this::enrichPrescription)
-                .collect(Collectors.toList());
+        List<PrescriptionEntity> prescriptions;
+        if (patientIds != null && doctorIds != null) {
+            prescriptions = prescriptionRepository.findByPatientIdInAndDoctorIdIn(patientIds, doctorIds);
+        } else if (patientIds != null) {
+            prescriptions = prescriptionRepository.findByPatientIdIn(patientIds);
+        } else if (doctorIds != null) {
+            prescriptions = prescriptionRepository.findByDoctorIdIn(doctorIds);
+        } else if (!status.isEmpty()) {
+            prescriptions = prescriptionRepository.findByStatusPattern(likeContains(status));
+        } else {
+            prescriptions = prescriptionRepository.findAll();
+        }
+
+        if (!status.isEmpty() && (patientIds != null || doctorIds != null)) {
+            String statusKeyword = status.toLowerCase();
+            prescriptions = prescriptions.stream()
+                    .filter(prescription -> prescription.getStatus() != null
+                            && prescription.getStatus().toLowerCase().contains(statusKeyword))
+                    .toList();
+        }
+        return toPrescriptions(prescriptions);
     }
 
     @Override
     public ApiResponse updatePrescription(PrescriptionUpdateRequest request) {
-        return prescriptionRepository.findById(request.getPrescriptionId()).map(p -> {
+        ApiResponse response = transactionTemplate.execute(status -> prescriptionRepository.findById(request.getPrescriptionId()).map(prescription -> {
             if (request.getItems() == null || request.getItems().isEmpty()) {
                 return new ApiResponse(false, "Toa thuốc phải có ít nhất một thuốc");
             }
-            p.setItems(request.getItems());
-            p.setStatus(request.getStatus());
-            prescriptionRepository.save(p);
-            publishRealtimeEvent(RealtimeEventType.PRESCRIPTION_CHANGED, p.getId(), "Toa thuốc đã được cập nhật");
+            prescription.replaceItems(request.getItems());
+            prescription.setStatus(request.getStatus());
+            prescriptionRepository.save(prescription);
             return new ApiResponse(true, "Đã cập nhật toa thuốc thành công");
-        }).orElse(new ApiResponse(false, "Không tìm thấy toa thuốc"));
+        }).orElse(new ApiResponse(false, "Không tìm thấy toa thuốc")));
+        if (response != null && response.isSuccess()) {
+            publishRealtimeEvent(RealtimeEventType.PRESCRIPTION_CHANGED, request.getPrescriptionId(), "Toa thuốc đã được cập nhật");
+        }
+        return response == null ? new ApiResponse(false, "Không thể cập nhật toa thuốc") : response;
     }
 
     @Override
@@ -507,7 +535,7 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public ApiResponse createTestResult(TestResultRequest request) {
-        PatientEntity patient = patientRepository.findByCode(request.getPatientId()).orElseGet(() -> patientRepository.findById(request.getPatientId()).orElse(null));
+        PatientEntity patient = findPatient(request.getPatientId());
         if (patient == null) {
             return new ApiResponse(false, "Không tìm thấy bệnh nhân");
         }
@@ -548,24 +576,16 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public List<TestResult> getTestResultsByDoctor(String doctorId) {
-        return testResultRepository.findAll().stream()
-                .map(TestResultMapper::toModel)
-                .peek(this::enrichTestResult)
-                .filter(t -> doctorId.equals(t.getDoctorId()))
-                .collect(Collectors.toList());
+        return toTestResults(testResultRepository.findByDoctorId(doctorId));
     }
 
     @Override
     public List<TestResult> getTestResultsByPatient(String patientId) {
-        PatientEntity patient = patientRepository.findByCode(patientId).orElseGet(() -> patientRepository.findById(patientId).orElse(null));
+        PatientEntity patient = findPatient(patientId);
         if (patient == null) {
             return List.of();
         }
-        return testResultRepository.findAll().stream()
-                .map(TestResultMapper::toModel)
-                .peek(this::enrichTestResult)
-                .filter(t -> patient.getId().equals(t.getPatientId()))
-                .collect(Collectors.toList());
+        return toTestResults(testResultRepository.findByPatientId(patient.getId()));
     }
 
     @Override
@@ -580,12 +600,12 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     @Override
     public List<User> searchUsers(UserSearchRequest request) {
-        String keyword = request.getKeyword() == null ? "" : request.getKeyword().toLowerCase();
-        return userRepository.findAll().stream()
+        String keyword = request.getKeyword() == null ? "" : request.getKeyword().trim();
+        if (keyword.isEmpty()) {
+            return getAllUsers();
+        }
+        return userRepository.searchByKeyword(likeContains(keyword)).stream()
                 .map(UserMapper::toModel)
-                .filter(u -> u.getUsername().toLowerCase().contains(keyword)
-                        || u.getFullName().toLowerCase().contains(keyword)
-                        || u.getRole().name().toLowerCase().contains(keyword))
                 .collect(Collectors.toList());
     }
 
@@ -638,26 +658,23 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
             return new ApiResponse(false, "Không tìm thấy người dùng");
         }
 
-        boolean assignedToPatients = patientRepository.findAll().stream()
-                .anyMatch(p -> userId.equals(p.getAssignedDoctorId()));
+        boolean assignedToPatients = patientRepository.existsByAssignedDoctorId(userId);
         if (assignedToPatients) {
             return new ApiResponse(false, "Không thể xóa người dùng vì đang được gán cho bệnh nhân");
         }
 
-        boolean hasMedicalRecords = medicalRecordRepository.findAll().stream()
-                .anyMatch(r -> userId.equals(r.getDoctorId()));
+        boolean hasMedicalRecords = medicalRecordRepository.existsByDoctorId(userId);
         if (hasMedicalRecords) {
             return new ApiResponse(false, "Không thể xóa người dùng vì còn hồ sơ bệnh án liên quan");
         }
 
-        boolean hasPrescriptions = prescriptionRepository.findAll().stream()
-                .anyMatch(p -> userId.equals(p.getDoctorId()));
+        boolean hasPrescriptions = prescriptionRepository.existsByDoctorId(userId);
         if (hasPrescriptions) {
             return new ApiResponse(false, "Không thể xóa người dùng vì còn toa thuốc liên quan");
         }
 
-        boolean hasTestResults = testResultRepository.findAll().stream()
-                .anyMatch(t -> userId.equals(t.getDoctorId()) || userId.equals(t.getTestingStaffId()));
+        boolean hasTestResults = testResultRepository.existsByDoctorId(userId)
+                || testResultRepository.existsByTestingStaffId(userId);
         if (hasTestResults) {
             return new ApiResponse(false, "Không thể xóa người dùng vì còn kết quả xét nghiệm liên quan");
         }
@@ -696,41 +713,134 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
         return value == null ? null : value.trim();
     }
 
-    private void enrichPrescription(Prescription prescription) {
-        if (prescription == null) {
-            return;
+    private PatientEntity findPatient(String value) {
+        if (isBlank(value)) {
+            return null;
         }
-        PatientEntity patient = patientRepository.findById(prescription.getPatientId()).orElse(null);
-        if (patient != null) {
-            prescription.setPatientCode(patient.getCode());
-        }
-        UserEntity doctor = userRepository.findById(prescription.getDoctorId()).orElse(null);
-        if (doctor != null) {
-            prescription.setDoctorCode(doctor.getUsername());
-        }
+        String key = value.trim();
+        return patientRepository.findByCode(key).or(() -> patientRepository.findById(key)).orElse(null);
     }
 
-    private void enrichTestResult(TestResult testResult) {
-        if (testResult == null) {
-            return;
+    private List<Patient> toPatients(List<PatientEntity> entities) {
+        List<Patient> patients = entities.stream().map(Mapper::toModel).toList();
+        Map<String, UserEntity> doctors = loadUsers(patients.stream()
+                .map(Patient::getAssignedDoctorId)
+                .filter(id -> !isBlank(id))
+                .collect(Collectors.toSet()));
+        for (Patient patient : patients) {
+            UserEntity doctor = doctors.get(patient.getAssignedDoctorId());
+            if (doctor != null) {
+                patient.setAssignedDoctorName(doctor.getFullName());
+            }
         }
-        PatientEntity patient = patientRepository.findById(testResult.getPatientId()).orElse(null);
-        if (patient != null) {
-            testResult.setPatientCode(patient.getCode());
+        return patients;
+    }
+
+    private List<Prescription> toPrescriptions(List<PrescriptionEntity> entities) {
+        Map<String, PatientEntity> patients = loadPatients(entities.stream().map(PrescriptionEntity::getPatientId).collect(Collectors.toSet()));
+        Map<String, UserEntity> doctors = loadUsers(entities.stream().map(PrescriptionEntity::getDoctorId).collect(Collectors.toSet()));
+        return entities.stream().map(entity -> {
+            Prescription prescription = Mapper.toModel(entity);
+            PatientEntity patient = patients.get(entity.getPatientId());
+            if (patient != null) {
+                prescription.setPatientCode(patient.getCode());
+                prescription.setPatientName(patient.getFullName());
+            }
+            UserEntity doctor = doctors.get(entity.getDoctorId());
+            if (doctor != null) {
+                prescription.setDoctorCode(doctor.getUsername());
+                prescription.setDoctorName(doctor.getFullName());
+            }
+            return prescription;
+        }).toList();
+    }
+
+    private List<MedicalRecord> toMedicalRecords(List<MedicalRecordEntity> entities) {
+        Map<String, PatientEntity> patients = loadPatients(entities.stream().map(MedicalRecordEntity::getPatientId).collect(Collectors.toSet()));
+        Map<String, UserEntity> doctors = loadUsers(entities.stream().map(MedicalRecordEntity::getDoctorId).collect(Collectors.toSet()));
+        return entities.stream().map(entity -> {
+            MedicalRecord record = Mapper.toModel(entity);
+            PatientEntity patient = patients.get(entity.getPatientId());
+            if (patient != null) {
+                record.setPatientCode(patient.getCode());
+                record.setPatientName(patient.getFullName());
+            }
+            UserEntity doctor = doctors.get(entity.getDoctorId());
+            if (doctor != null) {
+                record.setDoctorName(doctor.getFullName());
+            }
+            return record;
+        }).toList();
+    }
+
+    private List<TestResult> toTestResults(List<TestResultEntity> entities) {
+        Map<String, PatientEntity> patients = loadPatients(entities.stream().map(TestResultEntity::getPatientId).collect(Collectors.toSet()));
+        Map<String, UserEntity> doctors = loadUsers(entities.stream().map(TestResultEntity::getDoctorId).collect(Collectors.toSet()));
+        return entities.stream().map(entity -> {
+            TestResult testResult = TestResultMapper.toModel(entity);
+            PatientEntity patient = patients.get(entity.getPatientId());
+            if (patient != null) {
+                testResult.setPatientCode(patient.getCode());
+                testResult.setPatientName(patient.getFullName());
+            }
+            UserEntity doctor = doctors.get(entity.getDoctorId());
+            if (doctor != null) {
+                testResult.setDoctorCode(doctor.getUsername());
+                testResult.setDoctorName(doctor.getFullName());
+            }
+            return testResult;
+        }).toList();
+    }
+
+    private Map<String, PatientEntity> loadPatients(Collection<String> ids) {
+        Set<String> keys = normalizeIds(ids);
+        if (keys.isEmpty()) {
+            return Map.of();
         }
-        UserEntity doctor = userRepository.findById(testResult.getDoctorId()).orElse(null);
-        if (doctor != null) {
-            testResult.setDoctorCode(doctor.getUsername());
+        return patientRepository.findAllById(keys).stream()
+                .collect(Collectors.toMap(PatientEntity::getId, Function.identity()));
+    }
+
+    private Map<String, UserEntity> loadUsers(Collection<String> ids) {
+        Set<String> keys = normalizeIds(ids);
+        if (keys.isEmpty()) {
+            return Map.of();
         }
+        return userRepository.findAllById(keys).stream()
+                .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
+    }
+
+    private Set<String> normalizeIds(Collection<String> ids) {
+        Set<String> keys = new HashSet<>();
+        if (ids == null) {
+            return keys;
+        }
+        for (String id : ids) {
+            if (!isBlank(id)) {
+                keys.add(id);
+            }
+        }
+        return keys;
+    }
+
+    private String likeContains(String keyword) {
+        String escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        return "%" + escaped + "%";
     }
 
     private String generateNextPrescriptionCode() {
-        int max = prescriptionRepository.findAll().stream()
-                .map(PrescriptionEntity::getCode)
-                .filter(code -> code != null && code.matches("DT\\d+"))
-                .map(code -> Integer.parseInt(code.substring(2)))
-                .max(Integer::compareTo)
-                .orElse(0);
-        return String.format("DT%03d", max + 1);
+        Long sequence = transactionTemplate.execute(status -> {
+            jdbcTemplate.update("""
+                    INSERT INTO counters (id, seq)
+                    SELECT 'prescription', COALESCE(MAX(CAST(SUBSTRING(code, 3) AS UNSIGNED)), 0)
+                    FROM prescriptions
+                    WHERE code REGEXP '^DT[0-9]+$'
+                    ON DUPLICATE KEY UPDATE id = id
+                    """);
+            jdbcTemplate.update("UPDATE counters SET seq = LAST_INSERT_ID(seq + 1) WHERE id = 'prescription'");
+            return jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+        });
+        long value = sequence == null ? 1 : sequence;
+        return String.format("DT%03d", value);
     }
 }

@@ -241,8 +241,14 @@ public class DoctorView implements RefreshableView {
             return;
         }
         try {
-            List<Patient> waiting = appContext.getService().getWaitingPatientsByDoctor(doctorId);
             List<Patient> assigned = appContext.getService().getPatientsByDoctor(doctorId);
+            List<Patient> waiting = assigned.stream()
+                    .filter(patient -> {
+                        String status = patient.getStatus();
+                        return status != null && (status.equalsIgnoreCase(PatientStatus.WAITING)
+                                || status.equalsIgnoreCase(PatientStatus.ASSIGNED));
+                    })
+                    .toList();
             waitingPatients.setAll(waiting);
             myPatients.setAll(assigned);
             setStatus("Đã tải " + waiting.size() + " bệnh nhân chờ khám.", false);
@@ -261,7 +267,7 @@ public class DoctorView implements RefreshableView {
             ApiResponse response = appContext.getService().acceptPatient(patient.getCode(), currentDoctorId());
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
-                loadData();
+                appContext.reloadAfterLocalChange(this::loadData);
                 selectPatient(patient);
             }
         } catch (RemoteException e) {
@@ -297,7 +303,7 @@ public class DoctorView implements RefreshableView {
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
                 clearRecordForm();
-                loadData();
+                appContext.reloadAfterLocalChange(this::loadData);
             }
         } catch (RemoteException e) {
             showError("Không thể lưu hồ sơ bệnh án", e.getMessage());

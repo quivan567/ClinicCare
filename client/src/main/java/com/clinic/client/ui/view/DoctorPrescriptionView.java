@@ -345,7 +345,7 @@ public class DoctorPrescriptionView implements RefreshableView {
             setStatus(response.getMessage(), !response.isSuccess());
             if (response.isSuccess()) {
                 clearPrescription();
-                loadPatients();
+                appContext.reloadAfterLocalChange(this::loadPatients);
             }
         } catch (RemoteException e) {
             showError("Không thể tạo toa thuốc", e.getMessage());

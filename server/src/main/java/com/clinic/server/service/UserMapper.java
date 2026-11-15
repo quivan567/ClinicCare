@@ -15,7 +15,6 @@ public final class UserMapper {
         User u = new User();
         u.setId(e.getId());
         u.setUsername(e.getUsername());
-        u.setPassword(e.getPassword());
         u.setRole(e.getRole());
         u.setFullName(e.getFullName());
         u.setActive(e.isActive());

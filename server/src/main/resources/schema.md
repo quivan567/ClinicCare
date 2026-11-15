@@ -1,38 +1,61 @@
-# MongoDB Collections
+# MariaDB tables
+
+Database: `clinic_system`
 
 ## users
-- _id
-- username
+- id
+- username (unique)
 - password
 - role
-- fullName
+- full_name
 - active
 
 ## patients
-- _id
-- code
-- fullName
+- id
+- code (unique)
+- full_name
 - age
 - gender
 - phone
 - address
-- assignedDoctorId
+- assigned_doctor_id
 - status
+- last_visit_at
 
 ## medical_records
-- _id
-- patientId
-- doctorId
+- id
+- patient_id
+- doctor_id
 - diagnosis
 - notes
-- createdAt
+- created_at
 
 ## prescriptions
-- _id
-- patientId
-- doctorId
-- medicineName
+- id
+- code (unique)
+- patient_id
+- doctor_id
+- status
+- created_at
+
+## prescription_items
+- id
+- prescription_id
+- line_no
+- medicine_name
 - dosage
 - instructions
-- status
-- createdAt
+
+## test_results
+- id
+- patient_id
+- doctor_id
+- testing_staff_id
+- test_name
+- result_text
+- notes
+- created_at
+
+## counters
+- id
+- seq
