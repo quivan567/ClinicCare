@@ -32,6 +32,38 @@ Quản trị xem và sửa người dùng, bệnh nhân, toa thuốc, hồ sơ b
 
 Xóa bệnh nhân chỉ được khi không còn hồ sơ, toa thuốc, kết quả xét nghiệm, và lần khám gần nhất đã quá 3 năm. Xóa người dùng bị chặn nếu người đó còn gắn với bệnh nhân hoặc dữ liệu khám.
 
+## Trợ lý AI
+
+Trợ lý chỉ đọc và điền form. Người dùng vẫn tự bấm **Lưu hồ sơ** hoặc **Tiếp nhận**. AI không đổi trạng thái bệnh nhân, không xóa dữ liệu, không kê đơn và không cấp phát thuốc.
+
+| Màn hình | Nút | Việc trợ lý làm |
+|---|---|---|
+| Bác sĩ | **Tóm tắt** | Viết một đoạn tóm tắt hồ sơ cũ của bệnh nhân đang chọn. Chỉ bác sĩ được phân công bệnh nhân đó mới xem được. |
+| Bác sĩ | **Gợi ý từ ghi chú** | Đọc ghi chú khám, điền chẩn đoán, ghi chú đã viết lại và ô cần xét nghiệm. |
+| Lễ tân | **Điền từ mô tả** | Tách một câu mô tả thành họ tên, tuổi, giới tính, số điện thoại và địa chỉ. Ô trống hoặc tuổi bằng 0 được giữ nguyên. Mã bệnh nhân và bác sĩ không bị đổi. |
+
+Client không giữ API key. Nút bấm gọi RMI tới server, server mới gọi API tương thích OpenAI (`/chat/completions`). Gọi AI chạy ở luồng nền để cửa sổ JavaFX không bị đơ. Khi tắt trợ lý, thiếu địa chỉ, thiếu key hoặc thiếu tên model, nút báo **Chưa bật trợ lý AI** và không gọi mạng. JSON lỗi, hết thời gian chờ hoặc API lỗi thì form giữ nguyên và hiện thông báo tiếng Việt.
+
+Trong `server/src/main/resources/application.properties`:
+
+```properties
+clinic.ai.enabled=false
+clinic.ai.base-url=
+clinic.ai.api-key=
+clinic.ai.model=
+```
+
+Để dùng Gemini ở gói miễn phí, lấy key tại [Google AI Studio](https://aistudio.google.com/apikey) rồi điền:
+
+```properties
+clinic.ai.enabled=true
+clinic.ai.base-url=https://generativelanguage.googleapis.com/v1beta/openai
+clinic.ai.api-key=your_gemini_key
+clinic.ai.model=gemini-2.5-flash
+```
+
+Sửa xong phải khởi động lại `ClinicServerApplication`. Không commit `clinic.ai.api-key` và mật khẩu database lên git. Chỉ thử trợ lý với bệnh nhân mẫu, vì gói miễn phí có thể dùng nội dung gửi lên để cải thiện mô hình.
+
 ## Chạy dự án
 
 Cần JDK 17 trở lên, Maven và MariaDB đang chạy ở `localhost:3306`.
