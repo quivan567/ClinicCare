@@ -16,9 +16,12 @@ import com.clinic.shared.dto.AssignDoctorRequest;
 import com.clinic.shared.dto.ChangePasswordRequest;
 import com.clinic.shared.dto.CreatePrescriptionRequest;
 import com.clinic.shared.dto.DispensePrescriptionRequest;
+import com.clinic.shared.dto.IntakeParseResult;
 import com.clinic.shared.dto.LoginRequest;
 import com.clinic.shared.dto.LoginResponse;
 import com.clinic.shared.dto.MedicalRecordRequest;
+import com.clinic.shared.dto.MedicalRecordSuggestion;
+import com.clinic.shared.dto.PatientSummaryResponse;
 import com.clinic.shared.dto.PrescriptionSearchRequest;
 import com.clinic.shared.dto.PrescriptionUpdateRequest;
 import com.clinic.shared.dto.RealtimeEventType;
@@ -31,11 +34,13 @@ import com.clinic.shared.model.MedicalRecord;
 import com.clinic.shared.model.Patient;
 import com.clinic.shared.model.PatientStatus;
 import com.clinic.shared.model.Prescription;
+import com.clinic.shared.model.PrescriptionItem;
 import com.clinic.shared.model.PrescriptionStatus;
 import com.clinic.shared.model.Role;
 import com.clinic.shared.model.TestResult;
 import com.clinic.shared.model.User;
 import com.clinic.shared.rmi.ClinicService;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -45,9 +50,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -56,6 +64,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicService {
+    private static final DateTimeFormatter HISTORY_TIME = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+
     private final UserRepository userRepository;
     private final PatientRepository patientRepository;
     private final MedicalRecordRepository medicalRecordRepository;
@@ -64,6 +74,7 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
     private final RealtimeEventPublisher realtimeEventPublisher;
     private final TransactionTemplate transactionTemplate;
     private final JdbcTemplate jdbcTemplate;
+    private final AiAssistantService aiAssistantService;
 
     @Autowired
     public ClinicServiceImpl(UserRepository userRepository, PatientRepository patientRepository,
@@ -71,7 +82,8 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
                              TestResultRepository testResultRepository,
                              RealtimeEventPublisher realtimeEventPublisher,
                              PlatformTransactionManager transactionManager,
-                             JdbcTemplate jdbcTemplate) throws RemoteException {
+                             JdbcTemplate jdbcTemplate,
+                             AiAssistantService aiAssistantService) throws RemoteException {
         super();
         this.userRepository = userRepository;
         this.patientRepository = patientRepository;
@@ -81,6 +93,7 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
         this.realtimeEventPublisher = realtimeEventPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.jdbcTemplate = jdbcTemplate;
+        this.aiAssistantService = aiAssistantService;
     }
 
     @Override
@@ -361,6 +374,100 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
     @Override
     public List<MedicalRecord> getMedicalRecordsByDoctor(String doctorId) {
         return toMedicalRecords(medicalRecordRepository.findByDoctorId(doctorId));
+    }
+
+    @Override
+    public PatientSummaryResponse summarizePatient(String patientId, String doctorId) {
+        if (!aiAssistantService.isConfigured()) {
+            return PatientSummaryResponse.fail(aiAssistantService.disabledMessage());
+        }
+        ApiResponse doctorCheck = validateActiveUserRole(doctorId, Role.DOCTOR, "bác sĩ");
+        if (!doctorCheck.isSuccess()) {
+            return PatientSummaryResponse.fail(doctorCheck.getMessage());
+        }
+        PatientEntity patient = findPatient(patientId);
+        if (patient == null) {
+            return PatientSummaryResponse.fail("Không tìm thấy bệnh nhân");
+        }
+        if (!doctorId.equals(patient.getAssignedDoctorId())) {
+            return PatientSummaryResponse.fail("Bệnh nhân không thuộc bác sĩ này");
+        }
+        try {
+            String history = buildPatientHistory(patient);
+            JsonNode node = aiAssistantService.completeJson(
+                    "Bạn là trợ lý phòng khám. Chỉ tóm tắt dữ liệu được cung cấp, không bịa bệnh, thuốc hoặc kết quả. "
+                            + "Trả về đúng một JSON {\"summary\":\"một đoạn văn tiếng Việt\"}. Không dùng markdown.",
+                    history);
+            String summary = jsonText(node, "summary");
+            if (isBlank(summary)) {
+                return PatientSummaryResponse.fail("Trợ lý AI không tạo được tóm tắt");
+            }
+            return PatientSummaryResponse.ok(summary);
+        } catch (AiCallException ex) {
+            return PatientSummaryResponse.fail(ex.getMessage());
+        }
+    }
+
+    @Override
+    public MedicalRecordSuggestion suggestMedicalRecord(String doctorId, String notes) {
+        if (!aiAssistantService.isConfigured()) {
+            return MedicalRecordSuggestion.fail(aiAssistantService.disabledMessage());
+        }
+        ApiResponse doctorCheck = validateActiveUserRole(doctorId, Role.DOCTOR, "bác sĩ");
+        if (!doctorCheck.isSuccess()) {
+            return MedicalRecordSuggestion.fail(doctorCheck.getMessage());
+        }
+        if (isBlank(notes)) {
+            return MedicalRecordSuggestion.fail("Ghi chú không được để trống");
+        }
+        try {
+            JsonNode node = aiAssistantService.completeJson(
+                    "Bạn là trợ lý phòng khám. Đọc ghi chú khám và gợi ý chẩn đoán. "
+                            + "Không kê thuốc. Không khẳng định chắc chắn khi ghi chú chưa đủ. "
+                            + "Trả về đúng một JSON {\"diagnosis\":\"\",\"notes\":\"\",\"requiresTest\":false}. "
+                            + "notes là ghi chú đã viết lại cho rõ, bằng tiếng Việt. Không dùng markdown.",
+                    "Ghi chú khám:\n" + clip(notes, 2000));
+            String diagnosis = jsonText(node, "diagnosis");
+            if (isBlank(diagnosis)) {
+                return MedicalRecordSuggestion.fail("Trợ lý AI không tạo được gợi ý chẩn đoán");
+            }
+            return MedicalRecordSuggestion.ok(diagnosis, jsonText(node, "notes"), node.path("requiresTest").asBoolean(false));
+        } catch (AiCallException ex) {
+            return MedicalRecordSuggestion.fail(ex.getMessage());
+        }
+    }
+
+    @Override
+    public IntakeParseResult parseIntakeText(String receptionistId, String text) {
+        if (!aiAssistantService.isConfigured()) {
+            return IntakeParseResult.fail(aiAssistantService.disabledMessage());
+        }
+        ApiResponse receptionistCheck = validateActiveUserRole(receptionistId, Role.RECEPTIONIST, "lễ tân");
+        if (!receptionistCheck.isSuccess()) {
+            return IntakeParseResult.fail(receptionistCheck.getMessage());
+        }
+        if (isBlank(text)) {
+            return IntakeParseResult.fail("Mô tả không được để trống");
+        }
+        try {
+            JsonNode node = aiAssistantService.completeJson(
+                    "Bạn tách thông tin tiếp nhận bệnh nhân từ một câu tiếng Việt. "
+                            + "Không bịa thông tin không có trong câu. Không tạo mã bệnh nhân hay bác sĩ. "
+                            + "Trả về đúng một JSON {\"fullName\":\"\",\"age\":0,\"gender\":\"\",\"phone\":\"\",\"address\":\"\"}. "
+                            + "gender chỉ được là Nam, Nữ hoặc Khác. age bằng 0 nếu không có tuổi. Không dùng markdown.",
+                    "Mô tả:\n" + clip(text, 1000));
+            String fullName = jsonText(node, "fullName");
+            Integer age = jsonAge(node);
+            String gender = normalizeGender(jsonText(node, "gender"));
+            String phone = jsonText(node, "phone");
+            String address = jsonText(node, "address");
+            if (isBlank(fullName) && age == null && isBlank(gender) && isBlank(phone) && isBlank(address)) {
+                return IntakeParseResult.fail("Không tách được thông tin từ mô tả");
+            }
+            return IntakeParseResult.ok(fullName, age, gender, phone, address);
+        } catch (AiCallException ex) {
+            return IntakeParseResult.fail(ex.getMessage());
+        }
     }
 
     @Override
@@ -711,6 +818,126 @@ public class ClinicServiceImpl extends UnicastRemoteObject implements ClinicServ
 
     private String trim(String value) {
         return value == null ? null : value.trim();
+    }
+
+    private String buildPatientHistory(PatientEntity patient) {
+        String patientKey = patient.getId();
+        List<MedicalRecord> records = latest(
+                toMedicalRecords(medicalRecordRepository.findByPatientId(patientKey)),
+                MedicalRecord::getCreatedAt, 8);
+        List<TestResult> tests = latest(
+                toTestResults(testResultRepository.findByPatientId(patientKey)),
+                TestResult::getCreatedAt, 8);
+        List<Prescription> prescriptions = latest(
+                toPrescriptions(prescriptionRepository.findByPatientId(patientKey)),
+                Prescription::getCreatedAt, 8);
+
+        StringBuilder history = new StringBuilder();
+        history.append("Bệnh nhân: ").append(clip(patient.getFullName(), 120))
+                .append(", tuổi ").append(patient.getAge())
+                .append(", giới tính ").append(clip(patient.getGender(), 20))
+                .append(".\nHồ sơ cũ:\n");
+        if (records.isEmpty()) {
+            history.append("- Chưa có hồ sơ.\n");
+        }
+        for (MedicalRecord record : records) {
+            history.append("- ").append(formatTime(record.getCreatedAt()))
+                    .append(" | Chẩn đoán: ").append(clip(record.getDiagnosis(), 300))
+                    .append(" | Ghi chú: ").append(clip(record.getNotes(), 300))
+                    .append('\n');
+        }
+        history.append("Xét nghiệm:\n");
+        if (tests.isEmpty()) {
+            history.append("- Chưa có kết quả.\n");
+        }
+        for (TestResult test : tests) {
+            history.append("- ").append(formatTime(test.getCreatedAt()))
+                    .append(" | ").append(clip(test.getTestName(), 120))
+                    .append(": ").append(clip(test.getResult(), 300))
+                    .append('\n');
+        }
+        history.append("Toa thuốc:\n");
+        if (prescriptions.isEmpty()) {
+            history.append("- Chưa có toa.\n");
+        }
+        for (Prescription prescription : prescriptions) {
+            history.append("- ").append(formatTime(prescription.getCreatedAt())).append(" | ");
+            List<PrescriptionItem> items = prescription.getItems();
+            if (items == null || items.isEmpty()) {
+                history.append("Không có thuốc");
+            } else {
+                for (int i = 0; i < items.size(); i++) {
+                    PrescriptionItem item = items.get(i);
+                    if (i > 0) {
+                        history.append("; ");
+                    }
+                    history.append(clip(item.getMedicineName(), 80))
+                            .append(' ').append(clip(item.getDosage(), 80));
+                }
+            }
+            history.append('\n');
+        }
+        return history.toString();
+    }
+
+    private <T> List<T> latest(List<T> items, Function<T, LocalDateTime> time, int limit) {
+        return items.stream()
+                .sorted(Comparator.comparing(time, Comparator.nullsLast(Comparator.naturalOrder())).reversed())
+                .limit(limit)
+                .toList();
+    }
+
+    private String formatTime(LocalDateTime value) {
+        return value == null ? "" : value.format(HISTORY_TIME);
+    }
+
+    private String clip(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        String trimmed = value.trim().replace('\n', ' ').replace('\r', ' ');
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max) + "...";
+    }
+
+    private String jsonText(JsonNode node, String field) {
+        if (node == null || node.get(field) == null || node.get(field).isNull()) {
+            return "";
+        }
+        return node.get(field).asText("").trim();
+    }
+
+    private Integer jsonAge(JsonNode node) {
+        JsonNode ageNode = node == null ? null : node.get("age");
+        if (ageNode == null || ageNode.isNull()) {
+            return null;
+        }
+        int age = ageNode.isNumber() ? ageNode.asInt() : parseAge(ageNode.asText(""));
+        return age > 0 && age < 150 ? age : null;
+    }
+
+    private int parseAge(String value) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception ex) {
+            return 0;
+        }
+    }
+
+    private String normalizeGender(String value) {
+        if (isBlank(value)) {
+            return "";
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.equals("nam") || normalized.equals("male")) {
+            return "Nam";
+        }
+        if (normalized.equals("nữ") || normalized.equals("nu") || normalized.equals("female")) {
+            return "Nữ";
+        }
+        if (normalized.equals("khác") || normalized.equals("khac") || normalized.equals("other")) {
+            return "Khác";
+        }
+        return "";
     }
 
     private PatientEntity findPatient(String value) {

@@ -2,8 +2,10 @@ package com.clinic.client.ui.view;
 
 import com.clinic.client.ui.core.AppContext;
 import com.clinic.client.ui.core.RefreshableView;
+import com.clinic.client.ui.core.UiBackground;
 import com.clinic.client.ui.theme.AppTheme;
 import com.clinic.shared.dto.ApiResponse;
+import com.clinic.shared.dto.IntakeParseResult;
 import com.clinic.shared.dto.ReceptionIntakeRequest;
 import com.clinic.shared.dto.SearchPatientRequest;
 import com.clinic.shared.model.Patient;
@@ -21,6 +23,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
@@ -49,7 +52,10 @@ public class ReceptionView implements RefreshableView {
     private TextField phoneField;
     private TextField addressField;
     private ComboBox<User> doctorComboBox;
+    private TextArea intakeDescription;
+    private Button fillFromDescriptionButton;
     private Label statusLabel;
+    private boolean aiBusy;
 
     public ReceptionView(AppContext appContext) {
         this.appContext = appContext;
@@ -173,6 +179,19 @@ public class ReceptionView implements RefreshableView {
         Label title = new Label("Phiếu tiếp nhận");
         title.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: " + AppTheme.TEXT + ";");
 
+        intakeDescription = new TextArea();
+        intakeDescription.setPromptText("Ví dụ: Nguyễn Văn A, 32 tuổi, nam, 0901234567, ở Quận 1");
+        intakeDescription.setPrefRowCount(3);
+        intakeDescription.setWrapText(true);
+        intakeDescription.setStyle(AppTheme.textAreaStyle());
+
+        fillFromDescriptionButton = new Button("Điền từ mô tả");
+        fillFromDescriptionButton.setPrefHeight(38);
+        fillFromDescriptionButton.setStyle(AppTheme.secondaryButtonStyle());
+        fillFromDescriptionButton.setOnAction(event -> fillFromDescription());
+        HBox fillActions = new HBox(fillFromDescriptionButton);
+        fillActions.setAlignment(Pos.CENTER_RIGHT);
+
         GridPane form = new GridPane();
         form.setHgap(12);
         form.setVgap(12);
@@ -221,7 +240,7 @@ public class ReceptionView implements RefreshableView {
         statusLabel.setWrapText(true);
         statusLabel.setStyle("-fx-text-fill: " + AppTheme.MUTED + ";");
 
-        card.getChildren().addAll(title, form, actions, statusLabel);
+        card.getChildren().addAll(title, intakeDescription, fillActions, form, actions, statusLabel);
         return card;
     }
 
@@ -331,6 +350,80 @@ public class ReceptionView implements RefreshableView {
         }
     }
 
+    private void fillFromDescription() {
+        if (aiBusy) {
+            return;
+        }
+        if (isBlank(intakeDescription.getText())) {
+            setStatus("Nhập mô tả bệnh nhân trước khi điền.", true);
+            return;
+        }
+        String text = intakeDescription.getText().trim();
+        String receptionistId = currentReceptionistId();
+        setAiBusy(true);
+        setStatus("Đang hỏi trợ lý AI...", false);
+        UiBackground.call(
+                () -> appContext.getService().parseIntakeText(receptionistId, text),
+                this::applyParsedIntake,
+                error -> {
+                    setAiBusy(false);
+                    setStatus(error.getMessage() == null ? "Không thể điền từ mô tả." : error.getMessage(), true);
+                });
+    }
+
+    private void applyParsedIntake(IntakeParseResult result) {
+        setAiBusy(false);
+        if (result == null || !result.isSuccess()) {
+            setStatus(result == null ? "Không thể điền từ mô tả." : result.getMessage(), true);
+            return;
+        }
+        if (!isBlank(result.getFullName())) {
+            fullNameField.setText(result.getFullName().trim());
+        }
+        if (result.getAge() != null && result.getAge() > 0) {
+            ageField.setText(String.valueOf(result.getAge()));
+        }
+        String gender = normalizeGender(result.getGender());
+        if (!isBlank(gender)) {
+            genderComboBox.setValue(gender);
+        }
+        if (!isBlank(result.getPhone())) {
+            phoneField.setText(result.getPhone().trim());
+        }
+        if (!isBlank(result.getAddress())) {
+            addressField.setText(result.getAddress().trim());
+        }
+        setStatus(result.getMessage(), false);
+    }
+
+    private String normalizeGender(String value) {
+        if (isBlank(value)) {
+            return "";
+        }
+        String normalized = value.trim().toLowerCase();
+        if (normalized.equals("nam")) {
+            return "Nam";
+        }
+        if (normalized.equals("nữ") || normalized.equals("nu")) {
+            return "Nữ";
+        }
+        if (normalized.equals("khác") || normalized.equals("khac")) {
+            return "Khác";
+        }
+        return "";
+    }
+
+    private void setAiBusy(boolean busy) {
+        aiBusy = busy;
+        if (fillFromDescriptionButton != null) {
+            fillFromDescriptionButton.setDisable(busy);
+        }
+    }
+
+    private String currentReceptionistId() {
+        return appContext.getCurrentUser() == null ? null : appContext.getCurrentUser().getId();
+    }
+
     private void fillForm(Patient patient) {
         if (patient == null) {
             return;
@@ -356,6 +449,9 @@ public class ReceptionView implements RefreshableView {
         phoneField.clear();
         addressField.clear();
         doctorComboBox.setValue(null);
+        if (intakeDescription != null) {
+            intakeDescription.clear();
+        }
         setStatus("Sẵn sàng tạo phiếu tiếp nhận mới.", false);
     }
 

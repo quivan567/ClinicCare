@@ -5,9 +5,12 @@ import com.clinic.shared.dto.AssignDoctorRequest;
 import com.clinic.shared.dto.ChangePasswordRequest;
 import com.clinic.shared.dto.CreatePrescriptionRequest;
 import com.clinic.shared.dto.DispensePrescriptionRequest;
+import com.clinic.shared.dto.IntakeParseResult;
 import com.clinic.shared.dto.LoginRequest;
 import com.clinic.shared.dto.LoginResponse;
 import com.clinic.shared.dto.MedicalRecordRequest;
+import com.clinic.shared.dto.MedicalRecordSuggestion;
+import com.clinic.shared.dto.PatientSummaryResponse;
 import com.clinic.shared.dto.PrescriptionSearchRequest;
 import com.clinic.shared.dto.PrescriptionUpdateRequest;
 import com.clinic.shared.dto.ReceptionIntakeRequest;
@@ -56,6 +59,12 @@ public interface ClinicService extends Remote {
     ApiResponse assignDoctor(AssignDoctorRequest request) throws RemoteException;
 
     ApiResponse createMedicalRecord(MedicalRecordRequest request) throws RemoteException;
+
+    PatientSummaryResponse summarizePatient(String patientId, String doctorId) throws RemoteException;
+
+    MedicalRecordSuggestion suggestMedicalRecord(String doctorId, String notes) throws RemoteException;
+
+    IntakeParseResult parseIntakeText(String receptionistId, String text) throws RemoteException;
 
     List<MedicalRecord> getAllMedicalRecords() throws RemoteException;
 
